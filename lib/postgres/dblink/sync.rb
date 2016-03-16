@@ -1,9 +1,3 @@
 require "postgres/dblink/sync/version"
-
-module Postgres
-  module Dblink
-    module Sync
-      # Your code goes here...
-    end
-  end
-end
+require 'active_support/core_ext/object/blank'
+require 'active_support/core_ext/object/try'
