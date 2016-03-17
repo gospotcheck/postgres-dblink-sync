@@ -1,4 +1,5 @@
 require 'spec_helper'
+require 'postgres/dblink/sync/utils'
 
 RSpec.describe Postgres::Dblink::Sync::Utils do
 
