@@ -31,6 +31,12 @@ RSpec.describe Postgres::Dblink::Sync::Base do
         allow(subject).to receive(:query_full).and_return("THE_QUERY;")
       end
 
+      it "resets :disabled_reason" do
+        subject.disabled_reason = 'blah'
+        expect(subject.disabled_reason).to eq('blah')
+        subject.sync
+        expect(subject.disabled_reason).to eq(nil)
+      end
       it "executes correct query" do
         expect(subject).to receive(:execute_remote).with('THE_QUERY;')
         subject.sync

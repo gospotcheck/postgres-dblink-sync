@@ -19,6 +19,7 @@ module Postgres
 
         #Fully synchronizes this class
         def sync
+          self.disabled_reason = nil
           if valid?
             execute_remote(query_full)
             true
