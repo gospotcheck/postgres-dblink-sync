@@ -17,6 +17,12 @@ RSpec.describe Postgres::Dblink::Sync::Base do
         expect(subject).to respond_to(:disabled_reason=)
       end
     end
+    describe ":row_count" do
+      it "exists" do
+        expect(subject).to respond_to(:row_count)
+        expect(subject).to respond_to(:row_count=)
+      end
+    end
   end #end "attr_accessor"
 
   describe ".sync" do
@@ -176,7 +182,10 @@ RSpec.describe Postgres::Dblink::Sync::Base do
       expect(subject).to receive(:execute_remote).with("batch query select into table").twice
       subject.exec_remote_query_in_batches
     end
-
+    it "sets row_count" do
+      subject.exec_remote_query_in_batches
+      expect(subject.row_count).to eq(12)
+    end
   end #end "#exec_remote_query_in_batches"
 
   describe "#exec_query_close_cursor" do

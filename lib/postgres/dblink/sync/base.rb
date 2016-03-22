@@ -9,7 +9,7 @@ module Postgres
         DEFAULT_BATCH_SIZE = 10000
 
         #In case we can't synchronize, we can find out why
-        attr_accessor :disabled_reason
+        attr_accessor :disabled_reason, :row_count
 
         class << self
 
@@ -94,9 +94,11 @@ module Postgres
         def exec_remote_query_in_batches
           #Iterate until we have no more rows
           has_more_rows = true
+          self.row_count = 0
           while has_more_rows
             res = execute_remote(query_select_batch_into_table)
             has_more_rows = res.count > 0
+            self.row_count += res.count
           end
         end
 
