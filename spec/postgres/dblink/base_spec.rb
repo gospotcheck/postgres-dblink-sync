@@ -2,9 +2,17 @@ require 'spec_helper'
 
 RSpec.describe Postgres::Dblink::Sync::Base do
 
+  describe "constants" do
+    describe "DEFAULT_BATCH_SIZE" do
+      it "returns size" do
+        expect(described_class::DEFAULT_BATCH_SIZE).to eq(10000)
+      end
+    end
+  end #end "constants"
+
   describe "attr_accessor" do
     describe ":disabled_reason" do
-      it "should be set" do
+      it "exists" do
         expect(subject).to respond_to(:disabled_reason)
         expect(subject).to respond_to(:disabled_reason=)
       end
@@ -22,13 +30,12 @@ RSpec.describe Postgres::Dblink::Sync::Base do
 
   describe "#sync" do
     before do
-      allow(subject).to receive(:execute_remote)
+      allow(subject).to receive(:execute_sync)
     end
 
     describe "when synchronizer is valid" do
       before do
         allow(subject).to receive(:valid?).and_return(true)
-        allow(subject).to receive(:query_full).and_return("THE_QUERY;")
       end
 
       it "resets :disabled_reason" do
@@ -37,8 +44,8 @@ RSpec.describe Postgres::Dblink::Sync::Base do
         subject.sync
         expect(subject.disabled_reason).to eq(nil)
       end
-      it "executes correct query" do
-        expect(subject).to receive(:execute_remote).with('THE_QUERY;')
+      it "executes sync" do
+        expect(subject).to receive(:execute_sync)
         subject.sync
       end
       it "returns true" do
@@ -51,7 +58,7 @@ RSpec.describe Postgres::Dblink::Sync::Base do
       end
 
       it "does not attempt to sync" do
-        expect(subject).not_to receive(:execute_remote)
+        expect(subject).not_to receive(:execute_sync)
         subject.sync
       end
       it "returns false" do
@@ -59,6 +66,269 @@ RSpec.describe Postgres::Dblink::Sync::Base do
       end
     end
   end #end "#sync"
+
+  describe "#execute_sync" do
+    it "performs sync actions in order" do
+      expect(subject).to receive(:exec_query_dblink_connect).ordered
+      expect(subject).to receive(:exec_query_open_cursor).ordered
+      expect(subject).to receive(:exec_query_truncate_table).ordered
+      expect(subject).to receive(:exec_remote_query_in_batches).ordered
+      expect(subject).to receive(:exec_query_close_cursor).ordered
+      subject.execute_sync
+    end
+  end #end "#execute_sync"
+
+  describe "#batch_size" do
+    before do
+      stub_const('Postgres::Dblink::Sync::Base::DEFAULT_BATCH_SIZE', 'Groovy')
+    end
+    it "returns default batch size" do
+      expect(subject.batch_size).to eq('Groovy')
+    end
+  end #end "#batch_size"
+
+  describe "#connection_name" do
+    it "raises error" do
+      expect{subject.connection_name}.to raise_error("You must override `connection_name' in your class")
+    end
+  end #end "#connection_name"
+
+  describe "#remote_database_url" do
+    it "raises error" do
+      expect{subject.remote_database_url}.to raise_error("You must override `remote_database_url' in your class")
+    end
+  end #end "#remote_database_url"
+
+  describe "#table_name" do
+    it "raises error" do
+      expect{subject.table_name}.to raise_error("You must override `table_name' in your class")
+    end
+  end #end "#table_name"
+
+  describe "#remote_query" do
+    it "raises error" do
+      expect{subject.remote_query}.to raise_error("You must override `remote_query' in your class")
+    end
+  end #end "#remote_query"
+
+  describe "#remote_query_column_types" do
+    it "raises error" do
+      expect{subject.remote_query_column_types}.to raise_error("You must override `remote_query_column_types' in your class")
+    end
+  end #end "#remote_query_column_types"
+
+  describe "#execute_remote" do
+    it "raises error" do
+      expect{subject.execute_remote('the query')}.to raise_error("You must override `execute_remote' in your class")
+    end
+  end #end "#execute_remote"
+
+  describe "#valid?" do
+    it "raises error" do
+      expect{subject.valid?}.to raise_error("You must override `valid?' in your class")
+    end
+  end #end "#valid?"
+
+  describe "#exec_query_dblink_connect" do
+    before do
+      allow(subject).to receive(:query_enable_dblink).and_return('ENABLE QUERY;')
+      allow(subject).to receive(:query_dblink_connect).and_return('CONNECT QUERY;')
+    end
+
+    it "executes query_dblink_connect" do
+      expect(subject).to receive(:execute_remote).with('ENABLE QUERY;CONNECT QUERY;')
+      subject.exec_query_dblink_connect
+    end
+  end #end "#exec_query_dblink_connect"
+
+  describe "#exec_query_open_cursor" do
+    before do
+      allow(subject).to receive(:query_open_cursor).and_return('OPEN CURSOR QUERY;')
+    end
+
+    it "executes query_dblink_connect" do
+      expect(subject).to receive(:execute_remote).with('OPEN CURSOR QUERY;')
+      subject.exec_query_open_cursor
+    end
+  end #end "#exec_query_open_cursor"
+
+  describe "#exec_query_truncate_table" do
+    before do
+      allow(subject).to receive(:query_truncate_table).and_return('TRUNCATE QUERY;')
+    end
+
+    it "executes query_dblink_connect" do
+      expect(subject).to receive(:execute_remote).with('TRUNCATE QUERY;')
+      subject.exec_query_truncate_table
+    end
+  end #end "#exec_query_open_cursor"
+
+  describe "#exec_remote_query_in_batches" do
+    let(:batch1) { double("Batch 1", count: 12) }
+    let(:batch2) { double("Batch 2", count: 0) }
+
+    before do
+      allow(subject).to receive(:execute_remote).and_return(batch1, batch2)
+      allow(subject).to receive(:query_select_batch_into_table).and_return("batch query select into table")
+    end
+
+    it "executes remote query until no more results are returned" do
+      expect(subject).to receive(:execute_remote).with("batch query select into table").twice
+      subject.exec_remote_query_in_batches
+    end
+
+  end #end "#exec_remote_query_in_batches"
+
+  describe "#exec_query_close_cursor" do
+    before do
+      allow(subject).to receive(:query_close_cursor).and_return('CLOSE CURSOR QUERY;')
+    end
+
+    it "executes query_dblink_connect" do
+      expect(subject).to receive(:execute_remote).with('CLOSE CURSOR QUERY;')
+      subject.exec_query_close_cursor
+    end
+  end #end "#exec_query_close_cursor"
+
+  describe "#query_enable_dblink" do
+    it "should create dblink extension" do
+      expected_sql = <<-SQL.strip
+              -- Load extension
+              CREATE EXTENSION IF NOT EXISTS dblink;
+      SQL
+      expect(subject.query_enable_dblink).to eq(expected_sql)
+    end
+  end #end "#query_enable_dblink"
+
+  describe "#query_dblink_connect" do
+    before do
+      allow(subject).to receive(:connection_name).and_return('THE_VARIABLE_NAME')
+      allow(subject).to receive(:remote_database_url).and_return('the_follower_url')
+    end
+
+    it "should return correct sql" do
+      expect(subject).to receive(:get_connection_string).with('the_follower_url').and_return('the_connection_string')
+      expected_sql = <<-SQL.strip
+              -- Connect to remote db
+              DO $$
+              DECLARE
+                -- Get existing connections
+                conns text[] := dblink_get_connections();
+              BEGIN
+                -- Check if connection already exists
+                IF conns @> ARRAY['THE_VARIABLE_NAME'::text] THEN
+                  raise notice 'Using existing connection: %', conns;
+                ELSE
+                  -- Make connection
+                  PERFORM dblink_connect('THE_VARIABLE_NAME', 'the_connection_string');
+                END IF;
+              END$$;
+      SQL
+      expect(subject.query_dblink_connect).to eq(expected_sql)
+    end
+  end #end "#query_dblink_connect"
+
+  describe "#query_open_cursor" do
+    before do
+      allow(subject).to receive(:connection_name).and_return('the_conn')
+      allow(subject).to receive(:table_name).and_return('the_table')
+      allow(subject).to receive(:remote_query).and_return("The remote 'query';")
+    end
+
+    it "returns correct sql" do
+      expected_sql = <<-SQL.strip
+            SELECT dblink_open(
+              'the_conn',
+              'the_table',
+              'The remote ''query'';'
+            );
+      SQL
+      expect(subject.query_open_cursor).to eq(expected_sql)
+    end
+  end #end "#query_open_cursor"
+
+  describe "#query_close_cursor" do
+    before do
+      allow(subject).to receive(:connection_name).and_return('the_conn')
+      allow(subject).to receive(:table_name).and_return('the_table')
+    end
+
+    it "returns correct sql" do
+      expected_sql = <<-SQL.strip
+            SELECT dblink_close('the_conn', 'the_table')
+      SQL
+      expect(subject.query_close_cursor).to eq(expected_sql)
+    end
+  end #end "#query_close_cursor"
+
+  describe "#query_fetch_batch" do
+    before do
+      stub_const('Postgres::Dblink::Sync::Base::DEFAULT_BATCH_SIZE', '-5')
+      allow(subject).to receive(:connection_name).and_return('the_conn')
+      allow(subject).to receive(:table_name).and_return('the_table')
+      allow(subject).to receive(:query_part_table_definition).and_return('the_table_def')
+    end
+
+    it "returns correct sql" do
+      expected_sql = <<-SQL.strip
+            SELECT
+              *
+            FROM dblink_fetch(
+              'the_conn',
+              'the_table',
+              -5
+            )
+            AS (the_table_def)
+      SQL
+      expect(subject.query_fetch_batch).to eq(expected_sql)
+    end
+  end #end "#query_fetch_batch"
+
+  describe "#query_part_table_definition" do
+    let(:remote_query_column_types) do
+      [
+        ['column', 'type'],
+        ['id', 'word']
+      ]
+    end
+    before do
+      allow(subject).to receive(:remote_query_column_types).and_return(remote_query_column_types)
+    end
+
+    it "returns correct string" do
+      expect(subject.query_part_table_definition).to eq('column type, id word')
+    end
+  end #end "#query_part_table_definition"
+
+  describe "#query_select_batch_into_table" do
+    before do
+      allow(subject).to receive(:table_name).and_return('the_table')
+      allow(subject).to receive(:query_fetch_batch).and_return('the_fetch_query')
+    end
+
+    it "returns correct sql" do
+      expected_sql = <<-SQL.strip
+            -- Select into the_table table with remote data
+            INSERT INTO the_table
+              the_fetch_query
+            RETURNING 1;
+      SQL
+      expect(subject.query_select_batch_into_table).to eq(expected_sql)
+    end
+  end #end "#query_select_batch_into_table"
+
+  describe "#query_truncate_table" do
+    before do
+      allow(subject).to receive(:table_name).and_return('the_existing_table')
+    end
+    it "returns correct sql" do
+      expected_sql = <<-SQL.strip
+            -- Truncate table the_existing_table
+            TRUNCATE TABLE the_existing_table;
+      SQL
+      expect(subject.query_truncate_table).to eq(expected_sql)
+    end
+  end #end "#query_truncate_table"
 
   describe "#get_connection_string" do
 
@@ -96,280 +366,5 @@ RSpec.describe Postgres::Dblink::Sync::Base do
       end
     end
   end #end "#get_connection_string"
-
-  describe "#query_enable_dblink" do
-    it "should create dblink extension" do
-      expected_sql = <<-SQL.strip
-              -- Load extension
-              CREATE EXTENSION IF NOT EXISTS dblink;
-      SQL
-      expect(subject.query_enable_dblink).to eq(expected_sql)
-    end
-  end #end "#query_enable_dblink"
-
-  describe "#query_dblink_connection" do
-    before do
-      allow(subject).to receive(:connection_name).and_return('THE_VARIABLE_NAME')
-      allow(subject).to receive(:remote_database_url).and_return('the_follower_url')
-    end
-
-    it "should return correct sql" do
-      expect(subject).to receive(:get_connection_string).with('the_follower_url').and_return('the_connection_string')
-      expected_sql = <<-SQL.strip
-              -- Connect to remote db
-              DO $$
-              DECLARE
-                -- Get existing connections
-                conns text[] := dblink_get_connections();
-              BEGIN
-                -- Check if connection already exists
-                IF conns @> ARRAY['THE_VARIABLE_NAME'::text] THEN
-                  raise notice 'Using existing connection: %', conns;
-                ELSE
-                  -- Make connection
-                  PERFORM dblink_connect('THE_VARIABLE_NAME', 'the_connection_string');
-                END IF;
-              END$$;
-      SQL
-      expect(subject.query_dblink_connection).to eq(expected_sql)
-    end
-  end #end "#query_dblink_connection"
-
-  describe "#connection_name" do
-    it "raises error" do
-      expect{subject.connection_name}.to raise_error("You must override `connection_name' in your class")
-    end
-  end #end "#connection_name"
-
-  describe "#remote_database_url" do
-    it "raises error" do
-      expect{subject.remote_database_url}.to raise_error("You must override `remote_database_url' in your class")
-    end
-  end #end "#remote_database_url"
-
-  describe "#query_sync" do
-    describe "when sync_type is :truncate" do
-      before do
-        allow(subject).to receive(:sync_type).and_return(:truncate)
-        allow(subject).to receive(:query_sync_truncate).and_return("query_sync_truncate")
-      end
-      it "returns query_sync_truncate" do
-        expect(subject.query_sync).to eq('query_sync_truncate')
-      end
-    end
-    describe "when sync_type is :temp_table" do
-      before do
-        allow(subject).to receive(:sync_type).and_return(:temp_table)
-        allow(subject).to receive(:query_sync_temp_table).and_return("query_sync_temp_table")
-      end
-      it "returns query_sync_temp_table" do
-        expect(subject.query_sync).to eq('query_sync_temp_table')
-      end
-    end
-    describe "when sync_type is invalid" do
-      before do
-        allow(subject).to receive(:sync_type).and_return(:your_mom)
-      end
-      it "raises ArgumentError" do
-        expect { subject.query_sync }.to raise_error(ArgumentError, "You must override `sync_type' in your class as one of [:truncate, :temp_table]")
-      end
-    end
-  end #end "#query_sync"
-
-  describe "#query_sync_truncate" do
-    before do
-      allow(subject).to receive(:query_truncate_table).and_return("query_truncate_table")
-      allow(subject).to receive(:query_select_into_table).and_return("query_select_into_table")
-    end
-
-    it "includes sub-queries in correct order" do
-      expected_result = <<-STRING.strip
-            query_truncate_table
-            query_select_into_table
-      STRING
-      expect(subject.query_sync_truncate).to eq(expected_result)
-    end
-  end #end "#query_sync_truncate"
-
-  describe "#query_sync_temp_table" do
-    before do
-      allow(subject).to receive(:query_drop_temp_table).and_return("query_drop_temp_table")
-      allow(subject).to receive(:query_create_temp_table).and_return("query_create_temp_table")
-      allow(subject).to receive(:query_create_primary_key_sequence).and_return("query_create_primary_key_sequence")
-      allow(subject).to receive(:query_create_indexes).and_return("query_create_indexes")
-      allow(subject).to receive(:query_move_temp_table_into_place).and_return("query_move_temp_table_into_place")
-    end
-
-    it "includes sub-queries in correct order" do
-      expected_result = <<-STRING.strip
-            query_drop_temp_table
-            query_create_temp_table
-            query_create_primary_key_sequence
-            query_create_indexes
-            query_move_temp_table_into_place
-      STRING
-      expect(subject.query_sync_temp_table).to eq(expected_result)
-    end
-  end #end "#query_sync_temp_table"
-
-  describe "#sync_type" do
-    it "raises error" do
-      expect{subject.sync_type}.to raise_error("You must override `sync_type' in your class")
-    end
-  end #end "#sync_type"
-
-  describe "#table_name" do
-    it "raises error" do
-      expect{subject.table_name}.to raise_error("You must override `table_name' in your class")
-    end
-  end #end "#table_name"
-
-  describe "#temp_table_name" do
-    before do
-      allow(subject).to receive(:table_name).and_return("molecules")
-    end
-    it "appends _temp to table_name" do
-      expect(subject.temp_table_name).to eq("molecules_temp")
-    end
-  end #end "#temp_table_name"
-
-  describe "#sequence_name" do
-    it "raises error" do
-      expect{subject.sequence_name}.to raise_error("You must override `sequence_name' in your class")
-    end
-  end #end "#sequence_name"
-
-  describe "#primary_key" do
-    it "raises error" do
-      expect{subject.primary_key}.to raise_error("You must override `primary_key' in your class")
-    end
-  end #end "#primary_key"
-
-  describe "#query_remote" do
-    it "raises error" do
-      expect{subject.query_remote}.to raise_error("You must override `query_remote' in your class")
-    end
-  end #end "#query_remote"
-
-  describe "#query_truncate_table" do
-    before do
-      allow(subject).to receive(:table_name).and_return('the_existing_table')
-    end
-    it "returns correct sql" do
-      expected_sql = <<-SQL.strip
-            -- Truncate table the_existing_table
-            TRUNCATE TABLE the_existing_table;
-      SQL
-      expect(subject.query_truncate_table).to eq(expected_sql)
-    end
-  end #end "#query_truncate_table"
-
-  describe "#query_select_into_table" do
-    before do
-      allow(subject).to receive(:table_name).and_return('the_existing_table')
-      allow(subject).to receive(:query_remote).and_return('the_query_remote')
-    end
-    it "returns correct sql" do
-      expected_sql = <<-SQL.strip
-            -- Select into the_existing_table table with remote data
-            INSERT INTO the_existing_table
-              the_query_remote;
-      SQL
-      expect(subject.query_select_into_table).to eq(expected_sql)
-    end
-  end #end "#query_select_into_table"
-
-  describe "#query_create_temp_table" do
-    before do
-      allow(subject).to receive(:temp_table_name).and_return('a_temp_table')
-      allow(subject).to receive(:query_remote).and_return("the_remote_query")
-      allow(subject).to receive(:primary_key).and_return('the_primary_key')
-    end
-    it "should return correct sql" do
-      expected_sql = <<-SQL.strip
-            -- Create a_temp_table table with remote data
-            CREATE TABLE a_temp_table
-              AS
-                the_remote_query
-            ALTER TABLE a_temp_table ADD PRIMARY KEY (the_primary_key);
-      SQL
-      expect(subject.query_create_temp_table).to eq(expected_sql)
-    end
-  end #end "#query_create_temp_table"
-
-  describe "#query_drop_temp_table" do
-    before do
-      allow(subject).to receive(:temp_table_name).and_return('the_temp_table')
-    end
-    it "should return correct sql" do
-      expected_sql = <<-SQL.strip
-            -- Drop the_temp_table if exists
-            DROP TABLE IF EXISTS the_temp_table CASCADE;
-      SQL
-      expect(subject.query_drop_temp_table).to eq(expected_sql)
-    end
-  end #end "#query_drop_temp_table"
-
-  describe "#query_create_primary_key_sequence" do
-    before do
-      allow(subject).to receive(:sequence_name).and_return("genome")
-      allow(subject).to receive(:temp_table_name).and_return('ima_table')
-      allow(subject).to receive(:primary_key).and_return('motley_id')
-    end
-
-    it "should return correct sql" do
-      expected_sql = <<-SQL.strip
-            -- Create sequence if it does not already exist
-            DO $$
-            BEGIN
-              -- Check if sequence already exists
-              IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'genome') THEN
-                raise notice 'Using existing sequence: genome';
-              ELSE
-                -- Create sequence
-                raise notice 'Creating sequence: genome';
-                CREATE SEQUENCE genome
-                  START WITH 1
-                  INCREMENT BY 1
-                  NO MINVALUE
-                  NO MAXVALUE
-                  CACHE 1;
-              END IF;
-            END$$;
-            -- Add sequence to table and add constraints
-            ALTER SEQUENCE genome OWNED BY ima_table.motley_id;
-            ALTER TABLE ONLY ima_table ALTER COLUMN motley_id SET DEFAULT nextval('genome'::regclass);
-      SQL
-      expect(subject.query_create_primary_key_sequence).to eq(expected_sql)
-    end
-  end #end "#query_create_primary_key_sequence"
-
-  describe "#query_create_indexes" do
-    it "should do nothing" do
-      expect(subject.query_create_indexes).to eq(nil)
-    end
-  end #end "#query_create_indexes"
-
-  describe "#query_move_temp_table_into_place" do
-    before do
-      allow(subject).to receive(:table_name).and_return('eek')
-      allow(subject).to receive(:temp_table_name).and_return('less')
-    end
-    it "should return correct sql" do
-      expected_sql = <<-SQL.strip
-            -- Move eek into place
-            ALTER TABLE eek RENAME TO eek_old;
-            ALTER TABLE less RENAME TO eek;
-            DROP TABLE eek_old CASCADE;
-      SQL
-      expect(subject.query_move_temp_table_into_place).to eq(expected_sql)
-    end
-  end #end "#query_move_temp_table_into_place"
-
-  describe "#valid?" do
-    it "raises error" do
-      expect{subject.valid?}.to raise_error("You must override `valid?' in your class")
-    end
-  end #end "#valid?"
 
 end

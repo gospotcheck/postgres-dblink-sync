@@ -31,4 +31,5 @@ Gem::Specification.new do |spec|
   spec.add_development_dependency "rake", "~> 10.0"
   spec.add_development_dependency "rspec"
   spec.add_development_dependency "activesupport", "~> 4.2.4"
+  spec.add_development_dependency "pg", "~> 0.18.4"
 end

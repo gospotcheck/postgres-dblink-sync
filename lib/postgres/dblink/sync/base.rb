@@ -1,9 +1,12 @@
 require 'postgres/dblink/sync/utils'
+require 'pg/connection'
 
 module Postgres
   module Dblink
     module Sync
       class Base
+
+        DEFAULT_BATCH_SIZE = 10000
 
         #In case we can't synchronize, we can find out why
         attr_accessor :disabled_reason
@@ -21,16 +24,84 @@ module Postgres
         def sync
           self.disabled_reason = nil
           if valid?
-            execute_remote(query_full)
+            execute_sync
             true
           else
             false
           end
         end
 
-        #Includes dblink setup, connection and query
-        def query_full
-          query_enable_dblink + query_dblink_connection + query_sync
+        #Synchronizes data over in BATCH_SIZE batches
+        def execute_sync
+          exec_query_dblink_connect
+          exec_query_open_cursor
+          exec_query_truncate_table
+          exec_remote_query_in_batches
+          exec_query_close_cursor
+        end
+
+        def batch_size
+          DEFAULT_BATCH_SIZE
+        end
+
+        #Used in the dblink connections
+        def connection_name
+          raise "You must override `connection_name' in your class"
+        end
+
+        #Loads the actual URL from the given database variable
+        def remote_database_url
+          raise "You must override `remote_database_url' in your class"
+        end
+
+        #The name of the table
+        def table_name
+          raise "You must override `table_name' in your class"
+        end
+
+        #The remote query to pull data into this table
+        def remote_query
+          raise "You must override `remote_query' in your class"
+        end
+
+        #Returns an array of arrays of [column_name, column_type]
+        def remote_query_column_types
+          raise "You must override `remote_query_column_types' in your class"
+        end
+
+        #Executes the given query string in the remote dblink database by whatever means
+        def execute_remote(query)
+          raise "You must override `execute_remote' in your class"
+        end
+
+        #Called to ensure query has everything it needs to run
+        def valid?
+          raise "You must override `valid?' in your class"
+        end
+
+        def exec_query_dblink_connect
+          execute_remote(query_enable_dblink + query_dblink_connect)
+        end
+
+        def exec_query_open_cursor
+          execute_remote(query_open_cursor)
+        end
+
+        def exec_query_truncate_table
+          execute_remote(query_truncate_table)
+        end
+
+        def exec_remote_query_in_batches
+          #Iterate until we have no more rows
+          has_more_rows = true
+          while has_more_rows
+            res = execute_remote(query_select_batch_into_table)
+            has_more_rows = res.count > 0
+          end
+        end
+
+        def exec_query_close_cursor
+          execute_remote(query_close_cursor)
         end
 
         #Enables the dblink extension
@@ -42,7 +113,7 @@ module Postgres
         end
 
         #Returns the dblink connection query based on the follower database url
-        def query_dblink_connection
+        def query_dblink_connect
           #Get connection string from database url
           connection_string = get_connection_string(remote_database_url)
           #Ensure that we use an existing connection if we run within the same session
@@ -64,75 +135,52 @@ module Postgres
           SQL
         end
 
-        #Used in the dblink connections
-        def connection_name
-          raise "You must override `connection_name' in your class"
-        end
-
-        #Loads the actual URL from the given database variable
-        def remote_database_url
-          raise "You must override `remote_database_url' in your class"
-        end
-
-        #Returns sync query based on sync_type
-        def query_sync
-          case sync_type
-            when :truncate
-              query_sync_truncate
-            when :temp_table
-              query_sync_temp_table
-            else
-              raise ArgumentError, "You must override `sync_type' in your class as one of [:truncate, :temp_table]"
-          end
-        end
-
-        #Generates SQL based on table truncation
-        def query_sync_truncate
+        #Opens the remote cursor in the database
+        def query_open_cursor
           <<-SQL.strip
-            #{query_truncate_table}
-            #{query_select_into_table}
+            SELECT dblink_open(
+              '#{connection_name}',
+              '#{table_name}',
+              '#{PG::Connection.escape_string(remote_query)}'
+            );
           SQL
         end
 
-        #Generates the sql required to synchronize this table, assuming the dblink extension and connection already exist
-        def query_sync_temp_table
+        #Closes the remote cursor in the database
+        def query_close_cursor
           <<-SQL.strip
-            #{query_drop_temp_table}
-            #{query_create_temp_table}
-            #{query_create_primary_key_sequence}
-            #{query_create_indexes}
-            #{query_move_temp_table_into_place}
+            SELECT dblink_close('#{connection_name}', '#{table_name}')
           SQL
         end
 
-        #Either :truncation or :temp_table
-        def sync_type
-          raise "You must override `sync_type' in your class"
+        #Query to select a batch of size #batch_size
+        def query_fetch_batch
+          <<-SQL.strip
+            SELECT
+              *
+            FROM dblink_fetch(
+              '#{connection_name}',
+              '#{table_name}',
+              #{batch_size}
+            )
+            AS (#{query_part_table_definition})
+          SQL
         end
 
-        #The name of the table
-        def table_name
-          raise "You must override `table_name' in your class"
+        def query_part_table_definition
+          remote_query_column_types.map do |name, type|
+            "#{name} #{type}"
+          end.join(", ")
         end
 
-        #Automatic temp table name
-        def temp_table_name
-          "#{table_name}_temp"
-        end
-
-        #The name of the sequence to be used for the table, i.e. 'mission_responses_id_seq'
-        def sequence_name
-          raise "You must override `sequence_name' in your class"
-        end
-
-        #The name of the primary key for the table, typically 'id'
-        def primary_key
-          raise "You must override `primary_key' in your class"
-        end
-
-        #The remote query to pull data into this table
-        def query_remote
-          raise "You must override `query_remote' in your class"
+        #Selects into an existing table
+        def query_select_batch_into_table
+          <<-SQL.strip
+            -- Select into #{table_name} table with remote data
+            INSERT INTO #{table_name}
+              #{query_fetch_batch}
+            RETURNING 1;
+          SQL
         end
 
         def query_truncate_table
@@ -140,79 +188,6 @@ module Postgres
             -- Truncate table #{table_name}
             TRUNCATE TABLE #{table_name};
           SQL
-        end
-
-        #Selects into an existing table
-        def query_select_into_table
-          <<-SQL.strip
-            -- Select into #{table_name} table with remote data
-            INSERT INTO #{table_name}
-              #{query_remote};
-          SQL
-        end
-
-        #Drops the temp table for the overridden class
-        def query_drop_temp_table
-          <<-SQL.strip
-            -- Drop #{temp_table_name} if exists
-            DROP TABLE IF EXISTS #{temp_table_name} CASCADE;
-          SQL
-        end
-
-        #Creates the temporary table for the overridden class
-        def query_create_temp_table
-          <<-SQL.strip
-            -- Create #{temp_table_name} table with remote data
-            CREATE TABLE #{temp_table_name}
-              AS
-                #{query_remote}
-            ALTER TABLE #{temp_table_name} ADD PRIMARY KEY (#{primary_key});
-          SQL
-        end
-
-        #Creates the sequence and adds it to the primary key of the table
-        def query_create_primary_key_sequence
-          <<-SQL.strip
-            -- Create sequence if it does not already exist
-            DO $$
-            BEGIN
-              -- Check if sequence already exists
-              IF EXISTS (SELECT 1 FROM pg_class WHERE relname = '#{sequence_name}') THEN
-                raise notice 'Using existing sequence: #{sequence_name}';
-              ELSE
-                -- Create sequence
-                raise notice 'Creating sequence: #{sequence_name}';
-                CREATE SEQUENCE #{sequence_name}
-                  START WITH 1
-                  INCREMENT BY 1
-                  NO MINVALUE
-                  NO MAXVALUE
-                  CACHE 1;
-              END IF;
-            END$$;
-            -- Add sequence to table and add constraints
-            ALTER SEQUENCE #{sequence_name} OWNED BY #{temp_table_name}.#{primary_key};
-            ALTER TABLE ONLY #{temp_table_name} ALTER COLUMN #{primary_key} SET DEFAULT nextval('#{sequence_name}'::regclass);
-          SQL
-        end
-
-        #Creates the indexes on the temporary table
-        def query_create_indexes
-        end
-
-        #Renames old table, moves temp table into place, deletes old table
-        def query_move_temp_table_into_place
-          <<-SQL.strip
-            -- Move #{table_name} into place
-            ALTER TABLE #{table_name} RENAME TO #{table_name}_old;
-            ALTER TABLE #{temp_table_name} RENAME TO #{table_name};
-            DROP TABLE #{table_name}_old CASCADE;
-          SQL
-        end
-
-        #Called to ensure query has everything it needs to run
-        def valid?
-          raise "You must override `valid?' in your class"
         end
 
         #Get dblink connection string from database url
@@ -225,10 +200,6 @@ module Postgres
           str
         end
 
-        #Executes the given query string in the remote dblink database by whatever means
-        def execute_remote(query)
-          raise "You must override `execute_remote' in your class"
-        end
       end
     end
   end
