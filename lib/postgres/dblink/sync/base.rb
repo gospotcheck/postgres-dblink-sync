@@ -6,8 +6,6 @@ module Postgres
     module Sync
       class Base
 
-        DEFAULT_BATCH_SIZE = 10000
-
         #In case we can't synchronize, we can find out why
         attr_accessor :disabled_reason, :row_count
 
@@ -31,17 +29,16 @@ module Postgres
           end
         end
 
-        #Synchronizes data over in BATCH_SIZE batches
+        #Synchronizes data
         def execute_sync
           exec_query_dblink_connect
-          exec_query_open_cursor
-          exec_query_truncate_table
-          exec_remote_query_in_batches
-          exec_query_close_cursor
+          exec_query_truncate_table if insert_type.to_sym == :truncate
+          exec_sync
         end
 
-        def batch_size
-          DEFAULT_BATCH_SIZE
+        #Used in sub-classes to execute their query type
+        def exec_sync
+          raise "You must override `exec_sync' in your class"
         end
 
         #Used in the dblink connections
@@ -79,38 +76,37 @@ module Postgres
           raise "You must override `valid?' in your class"
         end
 
-        def exec_query_dblink_connect
-          execute_remote(query_enable_dblink + query_dblink_connect)
+        #Determines if we truncate the table before inserting
+        def insert_type
+          raise "You must override `insert_type' in your class to be one of [:truncate, :append]"
         end
 
-        def exec_query_open_cursor
-          execute_remote(query_open_cursor)
-        end
+        ############################################################
+        ## Base query wrappers used by different mixins and types
+        ############################################################
 
+        #Executes the truncate query
         def exec_query_truncate_table
           execute_remote(query_truncate_table)
         end
 
-        def exec_remote_query_in_batches
-          #Iterate until we have no more rows
-          has_more_rows = true
-          self.row_count = 0
-          while has_more_rows
-            res = execute_remote(query_select_batch_into_table)
-            has_more_rows = res.count > 0
-            self.row_count += res.count
-          end
+        def query_truncate_table
+          <<-SQL.strip
+            -- Truncate table #{table_name}
+            TRUNCATE TABLE #{table_name};
+          SQL
         end
 
-        def exec_query_close_cursor
-          execute_remote(query_close_cursor)
+        #Executes the dblink enable and connect queries
+        def exec_query_dblink_connect
+          execute_remote(query_enable_dblink + query_dblink_connect)
         end
 
         #Enables the dblink extension
         def query_enable_dblink
           <<-SQL.strip
               -- Load extension
-              CREATE EXTENSION IF NOT EXISTS dblink;
+              CREATE EXTENSION IF NOT EXISTS dblink SCHEMA public;
           SQL
         end
 
@@ -137,59 +133,11 @@ module Postgres
           SQL
         end
 
-        #Opens the remote cursor in the database
-        def query_open_cursor
-          <<-SQL.strip
-            SELECT dblink_open(
-              '#{connection_name}',
-              '#{table_name}',
-              '#{PG::Connection.escape_string(remote_query)}'
-            );
-          SQL
-        end
-
-        #Closes the remote cursor in the database
-        def query_close_cursor
-          <<-SQL.strip
-            SELECT dblink_close('#{connection_name}', '#{table_name}')
-          SQL
-        end
-
-        #Query to select a batch of size #batch_size
-        def query_fetch_batch
-          <<-SQL.strip
-            SELECT
-              *
-            FROM dblink_fetch(
-              '#{connection_name}',
-              '#{table_name}',
-              #{batch_size}
-            )
-            AS (#{query_part_table_definition})
-          SQL
-        end
-
+        #Returns the table definition based on the remote_query_column_types
         def query_part_table_definition
           remote_query_column_types.map do |name, type|
             "#{name} #{type}"
-          end.join(", ")
-        end
-
-        #Selects into an existing table
-        def query_select_batch_into_table
-          <<-SQL.strip
-            -- Select into #{table_name} table with remote data
-            INSERT INTO #{table_name}
-              #{query_fetch_batch}
-            RETURNING 1;
-          SQL
-        end
-
-        def query_truncate_table
-          <<-SQL.strip
-            -- Truncate table #{table_name}
-            TRUNCATE TABLE #{table_name};
-          SQL
+          end.join("\n              , ")
         end
 
         #Get dblink connection string from database url

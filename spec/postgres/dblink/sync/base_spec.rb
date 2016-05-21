@@ -2,14 +2,6 @@ require 'spec_helper'
 
 RSpec.describe Postgres::Dblink::Sync::Base do
 
-  describe "constants" do
-    describe "DEFAULT_BATCH_SIZE" do
-      it "returns size" do
-        expect(described_class::DEFAULT_BATCH_SIZE).to eq(10000)
-      end
-    end
-  end #end "constants"
-
   describe "attr_accessor" do
     describe ":disabled_reason" do
       it "exists" do
@@ -74,24 +66,60 @@ RSpec.describe Postgres::Dblink::Sync::Base do
   end #end "#sync"
 
   describe "#execute_sync" do
-    it "performs sync actions in order" do
-      expect(subject).to receive(:exec_query_dblink_connect).ordered
-      expect(subject).to receive(:exec_query_open_cursor).ordered
-      expect(subject).to receive(:exec_query_truncate_table).ordered
-      expect(subject).to receive(:exec_remote_query_in_batches).ordered
-      expect(subject).to receive(:exec_query_close_cursor).ordered
-      subject.execute_sync
+    describe "when #insert_type returns :truncate" do
+      before do
+        allow(subject).to receive(:insert_type).and_return(:truncate)
+      end
+
+      it "executes sync actions in order" do
+        expect(subject).to receive(:exec_query_dblink_connect).ordered
+        expect(subject).to receive(:exec_query_truncate_table).ordered
+        expect(subject).to receive(:exec_sync).ordered
+        subject.execute_sync
+      end
+    end
+    describe "when #insert_type returns 'truncate'" do
+      before do
+        allow(subject).to receive(:insert_type).and_return('truncate')
+      end
+
+      it "executes sync actions in order" do
+        expect(subject).to receive(:exec_query_dblink_connect).ordered
+        expect(subject).to receive(:exec_query_truncate_table).ordered
+        expect(subject).to receive(:exec_sync).ordered
+        subject.execute_sync
+      end
+    end
+
+    describe "when #insert_type returns :append" do
+      before do
+        allow(subject).to receive(:insert_type).and_return(:append)
+      end
+
+      it "executes sync actions in order" do
+        expect(subject).to receive(:exec_query_dblink_connect).ordered
+        expect(subject).to receive(:exec_sync).ordered
+        subject.execute_sync
+      end
+    end
+    describe "when #insert_type returns 'append'" do
+      before do
+        allow(subject).to receive(:insert_type).and_return('append')
+      end
+
+      it "executes sync actions in order" do
+        expect(subject).to receive(:exec_query_dblink_connect).ordered
+        expect(subject).to receive(:exec_sync).ordered
+        subject.execute_sync
+      end
     end
   end #end "#execute_sync"
 
-  describe "#batch_size" do
-    before do
-      stub_const('Postgres::Dblink::Sync::Base::DEFAULT_BATCH_SIZE', 'Groovy')
+  describe "#exec_sync" do
+    it "raises error" do
+      expect{subject.exec_sync}.to raise_error("You must override `exec_sync' in your class")
     end
-    it "returns default batch size" do
-      expect(subject.batch_size).to eq('Groovy')
-    end
-  end #end "#batch_size"
+  end #end "#exec_sync"
 
   describe "#connection_name" do
     it "raises error" do
@@ -135,6 +163,36 @@ RSpec.describe Postgres::Dblink::Sync::Base do
     end
   end #end "#valid?"
 
+  describe "#insert_type" do
+    it "raises error" do
+      expect{subject.insert_type}.to raise_error("You must override `insert_type' in your class to be one of [:truncate, :append]")
+    end
+  end #end "#insert_type"
+
+  describe "#exec_query_truncate_table" do
+    before do
+      allow(subject).to receive(:query_truncate_table).and_return('TRUNCATE QUERY;')
+    end
+
+    it "executes query_truncate_table" do
+      expect(subject).to receive(:execute_remote).with('TRUNCATE QUERY;')
+      subject.exec_query_truncate_table
+    end
+  end #end "#exec_query_truncate_table"
+
+  describe "#query_truncate_table" do
+    before do
+      allow(subject).to receive(:table_name).and_return('the_existing_table')
+    end
+    it "returns correct sql" do
+      expected_sql = <<-SQL.strip
+            -- Truncate table the_existing_table
+            TRUNCATE TABLE the_existing_table;
+      SQL
+      expect(subject.query_truncate_table).to eq(expected_sql)
+    end
+  end #end "#query_truncate_table"
+
   describe "#exec_query_dblink_connect" do
     before do
       allow(subject).to receive(:query_enable_dblink).and_return('ENABLE QUERY;')
@@ -147,63 +205,11 @@ RSpec.describe Postgres::Dblink::Sync::Base do
     end
   end #end "#exec_query_dblink_connect"
 
-  describe "#exec_query_open_cursor" do
-    before do
-      allow(subject).to receive(:query_open_cursor).and_return('OPEN CURSOR QUERY;')
-    end
-
-    it "executes query_dblink_connect" do
-      expect(subject).to receive(:execute_remote).with('OPEN CURSOR QUERY;')
-      subject.exec_query_open_cursor
-    end
-  end #end "#exec_query_open_cursor"
-
-  describe "#exec_query_truncate_table" do
-    before do
-      allow(subject).to receive(:query_truncate_table).and_return('TRUNCATE QUERY;')
-    end
-
-    it "executes query_dblink_connect" do
-      expect(subject).to receive(:execute_remote).with('TRUNCATE QUERY;')
-      subject.exec_query_truncate_table
-    end
-  end #end "#exec_query_open_cursor"
-
-  describe "#exec_remote_query_in_batches" do
-    let(:batch1) { double("Batch 1", count: 12) }
-    let(:batch2) { double("Batch 2", count: 0) }
-
-    before do
-      allow(subject).to receive(:execute_remote).and_return(batch1, batch2)
-      allow(subject).to receive(:query_select_batch_into_table).and_return("batch query select into table")
-    end
-
-    it "executes remote query until no more results are returned" do
-      expect(subject).to receive(:execute_remote).with("batch query select into table").twice
-      subject.exec_remote_query_in_batches
-    end
-    it "sets row_count" do
-      subject.exec_remote_query_in_batches
-      expect(subject.row_count).to eq(12)
-    end
-  end #end "#exec_remote_query_in_batches"
-
-  describe "#exec_query_close_cursor" do
-    before do
-      allow(subject).to receive(:query_close_cursor).and_return('CLOSE CURSOR QUERY;')
-    end
-
-    it "executes query_dblink_connect" do
-      expect(subject).to receive(:execute_remote).with('CLOSE CURSOR QUERY;')
-      subject.exec_query_close_cursor
-    end
-  end #end "#exec_query_close_cursor"
-
   describe "#query_enable_dblink" do
-    it "should create dblink extension" do
+    it "returns correct sql" do
       expected_sql = <<-SQL.strip
               -- Load extension
-              CREATE EXTENSION IF NOT EXISTS dblink;
+              CREATE EXTENSION IF NOT EXISTS dblink SCHEMA public;
       SQL
       expect(subject.query_enable_dblink).to eq(expected_sql)
     end
@@ -215,7 +221,7 @@ RSpec.describe Postgres::Dblink::Sync::Base do
       allow(subject).to receive(:remote_database_url).and_return('the_follower_url')
     end
 
-    it "should return correct sql" do
+    it "returns correct sql" do
       expect(subject).to receive(:get_connection_string).with('the_follower_url').and_return('the_connection_string')
       expected_sql = <<-SQL.strip
               -- Connect to remote db
@@ -237,62 +243,6 @@ RSpec.describe Postgres::Dblink::Sync::Base do
     end
   end #end "#query_dblink_connect"
 
-  describe "#query_open_cursor" do
-    before do
-      allow(subject).to receive(:connection_name).and_return('the_conn')
-      allow(subject).to receive(:table_name).and_return('the_table')
-      allow(subject).to receive(:remote_query).and_return("The remote 'query';")
-    end
-
-    it "returns correct sql" do
-      expected_sql = <<-SQL.strip
-            SELECT dblink_open(
-              'the_conn',
-              'the_table',
-              'The remote ''query'';'
-            );
-      SQL
-      expect(subject.query_open_cursor).to eq(expected_sql)
-    end
-  end #end "#query_open_cursor"
-
-  describe "#query_close_cursor" do
-    before do
-      allow(subject).to receive(:connection_name).and_return('the_conn')
-      allow(subject).to receive(:table_name).and_return('the_table')
-    end
-
-    it "returns correct sql" do
-      expected_sql = <<-SQL.strip
-            SELECT dblink_close('the_conn', 'the_table')
-      SQL
-      expect(subject.query_close_cursor).to eq(expected_sql)
-    end
-  end #end "#query_close_cursor"
-
-  describe "#query_fetch_batch" do
-    before do
-      stub_const('Postgres::Dblink::Sync::Base::DEFAULT_BATCH_SIZE', '-5')
-      allow(subject).to receive(:connection_name).and_return('the_conn')
-      allow(subject).to receive(:table_name).and_return('the_table')
-      allow(subject).to receive(:query_part_table_definition).and_return('the_table_def')
-    end
-
-    it "returns correct sql" do
-      expected_sql = <<-SQL.strip
-            SELECT
-              *
-            FROM dblink_fetch(
-              'the_conn',
-              'the_table',
-              -5
-            )
-            AS (the_table_def)
-      SQL
-      expect(subject.query_fetch_batch).to eq(expected_sql)
-    end
-  end #end "#query_fetch_batch"
-
   describe "#query_part_table_definition" do
     let(:remote_query_column_types) do
       [
@@ -305,39 +255,9 @@ RSpec.describe Postgres::Dblink::Sync::Base do
     end
 
     it "returns correct string" do
-      expect(subject.query_part_table_definition).to eq('column type, id word')
+      expect(subject.query_part_table_definition).to eq("column type\n              , id word")
     end
   end #end "#query_part_table_definition"
-
-  describe "#query_select_batch_into_table" do
-    before do
-      allow(subject).to receive(:table_name).and_return('the_table')
-      allow(subject).to receive(:query_fetch_batch).and_return('the_fetch_query')
-    end
-
-    it "returns correct sql" do
-      expected_sql = <<-SQL.strip
-            -- Select into the_table table with remote data
-            INSERT INTO the_table
-              the_fetch_query
-            RETURNING 1;
-      SQL
-      expect(subject.query_select_batch_into_table).to eq(expected_sql)
-    end
-  end #end "#query_select_batch_into_table"
-
-  describe "#query_truncate_table" do
-    before do
-      allow(subject).to receive(:table_name).and_return('the_existing_table')
-    end
-    it "returns correct sql" do
-      expected_sql = <<-SQL.strip
-            -- Truncate table the_existing_table
-            TRUNCATE TABLE the_existing_table;
-      SQL
-      expect(subject.query_truncate_table).to eq(expected_sql)
-    end
-  end #end "#query_truncate_table"
 
   describe "#get_connection_string" do
 
