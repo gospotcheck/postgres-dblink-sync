@@ -11,8 +11,11 @@ module Postgres::Dblink::Sync
     def query_full_select_into_table
       <<-SQL.strip
               INSERT INTO #{table_name}
+                (
+                  #{query_part_column_names}
+                )
                 SELECT
-                  *
+                  #{query_part_column_names}
                 FROM dblink(
                   '#{connection_name}',
                   '#{PG::Connection.escape_string(remote_query)}'

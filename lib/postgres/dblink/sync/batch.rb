@@ -50,6 +50,9 @@ module Postgres::Dblink::Sync
       <<-SQL.strip
               -- Select into #{table_name} table with remote data
               INSERT INTO #{table_name}
+                (
+                  #{query_part_column_names}
+                )
                 #{query_batch_fetch};
       SQL
     end
@@ -58,7 +61,7 @@ module Postgres::Dblink::Sync
     def query_batch_fetch
       <<-SQL.strip
               SELECT
-                *
+                #{query_part_column_names}
               FROM dblink_fetch(
                 '#{connection_name}',
                 '#{table_name}',

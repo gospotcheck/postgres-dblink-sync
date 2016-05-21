@@ -259,6 +259,22 @@ RSpec.describe Postgres::Dblink::Sync::Base do
     end
   end #end "#query_part_table_definition"
 
+  describe "#query_part_column_names" do
+    let(:remote_query_column_types) do
+      [
+        ['column', 'type'],
+        ['id', 'word']
+      ]
+    end
+    before do
+      allow(subject).to receive(:remote_query_column_types).and_return(remote_query_column_types)
+    end
+
+    it "returns correct string" do
+      expect(subject.query_part_column_names).to eq("column\n                  , id")
+    end
+  end #end "#query_part_column_names"
+
   describe "#get_connection_string" do
 
     subject { described_class.new.get_connection_string(url) }

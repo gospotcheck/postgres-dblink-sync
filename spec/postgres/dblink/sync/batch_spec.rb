@@ -81,12 +81,16 @@ RSpec.describe Postgres::Dblink::Sync::Batch do
     before do
       allow(subject).to receive(:table_name).and_return('the_table')
       allow(subject).to receive(:query_batch_fetch).and_return('the_fetch_query')
+      allow(subject).to receive(:query_part_column_names).and_return('the, column, names')
     end
 
     it "returns correct sql" do
       expected_sql = <<-SQL.strip
               -- Select into the_table table with remote data
               INSERT INTO the_table
+                (
+                  the, column, names
+                )
                 the_fetch_query;
       SQL
       expect(subject.query_batch_select_into_table).to eq(expected_sql)
@@ -113,12 +117,13 @@ RSpec.describe Postgres::Dblink::Sync::Batch do
       allow(subject).to receive(:connection_name).and_return('the_conn')
       allow(subject).to receive(:table_name).and_return('the_table')
       allow(subject).to receive(:query_part_table_definition).and_return('the_table_def')
+      allow(subject).to receive(:query_part_column_names).and_return('the, column, names')
     end
 
     it "returns correct sql" do
       expected_sql = <<-SQL.strip
               SELECT
-                *
+                the, column, names
               FROM dblink_fetch(
                 'the_conn',
                 'the_table',

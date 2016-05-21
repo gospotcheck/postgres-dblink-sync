@@ -26,12 +26,16 @@ RSpec.describe Postgres::Dblink::Sync::Full do
       allow(subject).to receive(:connection_name).and_return("the_conn_name")
       allow(subject).to receive(:remote_query).and_return("an escaped string with 'quoted' quotes")
       allow(subject).to receive(:query_part_table_definition).and_return("the, table, def")
+      allow(subject).to receive(:query_part_column_names).and_return("the, column, names")
     end
     it "returns correct sql" do
       expected_sql = <<-SQL.strip
               INSERT INTO the_table
+                (
+                  the, column, names
+                )
                 SELECT
-                  *
+                  the, column, names
                 FROM dblink(
                   'the_conn_name',
                   'an escaped string with ''quoted'' quotes'

@@ -140,6 +140,11 @@ module Postgres
           end.join("\n              , ")
         end
 
+        #Returns the column names for the query for select order
+        def query_part_column_names
+          remote_query_column_types.map{|name, type| name}.join("\n                  , ")
+        end
+
         #Get dblink connection string from database url
         def get_connection_string(url)
           conn = Utils.parse_connection_url(url)
